@@ -1,0 +1,172 @@
+version: 2.1
+
+orbs:
+  aws-cli: circleci/aws-cli@3.1.3
+
+jobs:
+  dev-plan-apply:
+    working_directory: /tmp/project
+    docker:
+      - image: docker.mirror.hashicorp.services/hashicorp/terraform:light
+    steps:
+      - checkout
+      - run:
+          name: terraform init & plan
+          command: |
+            STAGE=dev
+            terraform init -input=false -backend-config=accounts/$STAGE/backend.conf -reconfigure
+            terraform plan -out tfapply -var-file accounts/$STAGE/terraform.tfvars
+      - persist_to_workspace:
+          root: .
+          paths:
+            - .
+  dev-apply:
+    docker:
+      - image: docker.mirror.hashicorp.services/hashicorp/terraform:light
+    steps:
+      - attach_workspace:
+          at: .
+      - run:
+          name: terraform
+          command: |
+            STAGE=dev
+            terraform apply -auto-approve tfapply
+      - persist_to_workspace:
+          root: .
+          paths:
+            - .
+  qa-plan-apply:
+    working_directory: /tmp/project
+    docker:
+      - image: docker.mirror.hashicorp.services/hashicorp/terraform:light
+    steps:
+      - checkout
+      - aws-cli/install
+      - aws-cli/setup
+      - run:
+          name: terraform init & plan
+          command: |
+            STAGE=qa
+            ACCOUNT_ID=<QA_ACCOUNT>
+            export $(printf "AWS_ACCESS_KEY_ID=%s AWS_SECRET_ACCESS_KEY=%s AWS_SESSION_TOKEN=%s" \
+            $(aws sts assume-role \
+            --region "us-east-1" \
+            --role-arn arn:aws:iam::${ACCOUNT_ID}:role/OrganizationAccountAccessRole \
+            --role-session-name OrganizationAccountAccessRole \
+            --query "Credentials.[AccessKeyId,SecretAccessKey,SessionToken]" \
+            --output text))
+            terraform init -input=false -backend-config=accounts/$STAGE/backend.conf -reconfigure
+            terraform plan -out tfapply -var-file accounts/$STAGE/terraform.tfvars
+      - persist_to_workspace:
+          root: .
+          paths:
+            - .
+  qa-apply:
+    docker:
+      - image: docker.mirror.hashicorp.services/hashicorp/terraform:light
+    steps:
+      - attach_workspace:
+          at: .
+      - aws-cli/install
+      - aws-cli/setup
+      - run:
+          name: terraform
+          command: |
+            STAGE=qa
+            ACCOUNT_ID=<QA_ACCOUNT>
+            export $(printf "AWS_ACCESS_KEY_ID=%s AWS_SECRET_ACCESS_KEY=%s AWS_SESSION_TOKEN=%s" \
+            $(aws sts assume-role \
+            --region "us-east-1" \
+            --role-arn arn:aws:iam::${ACCOUNT_ID}:role/OrganizationAccountAccessRole \
+            --role-session-name OrganizationAccountAccessRole \
+            --query "Credentials.[AccessKeyId,SecretAccessKey,SessionToken]" \
+            --output text))
+            terraform apply -auto-approve tfapply
+      - persist_to_workspace:
+          root: .
+          paths:
+            - .
+  prod-plan-apply:
+    working_directory: /tmp/project
+    docker:
+      - image: docker.mirror.hashicorp.services/hashicorp/terraform:light
+    steps:
+      - checkout
+      - aws-cli/install
+      - aws-cli/setup
+      - run:
+          name: terraform init & plan
+          command: |
+            STAGE=prod
+            ACCOUNT_ID=<PROD_ACCOUNT>
+            export $(printf "AWS_ACCESS_KEY_ID=%s AWS_SECRET_ACCESS_KEY=%s AWS_SESSION_TOKEN=%s" \
+            $(aws sts assume-role \
+            --region "us-east-1" \
+            --role-arn arn:aws:iam::${ACCOUNT_ID}:role/OrganizationAccountAccessRole \
+            --role-session-name OrganizationAccountAccessRole \
+            --query "Credentials.[AccessKeyId,SecretAccessKey,SessionToken]" \
+            --output text))
+            terraform init -input=false -backend-config=accounts/$STAGE/backend.conf -reconfigure
+            terraform plan -out tfapply -var-file accounts/$STAGE/terraform.tfvars
+      - persist_to_workspace:
+          root: .
+          paths:
+            - .
+  prod-apply:
+    docker:
+      - image: docker.mirror.hashicorp.services/hashicorp/terraform:light
+    steps:
+      - attach_workspace:
+          at: .
+      - aws-cli/install
+      - aws-cli/setup
+      - run:
+          name: terraform
+          command: |
+            STAGE=prod
+            ACCOUNT_ID=<PROD_ACCOUNT>
+            export $(printf "AWS_ACCESS_KEY_ID=%s AWS_SECRET_ACCESS_KEY=%s AWS_SESSION_TOKEN=%s" \
+            $(aws sts assume-role \
+            --region "us-east-1" \
+            --role-arn arn:aws:iam::${ACCOUNT_ID}:role/OrganizationAccountAccessRole \
+            --role-session-name OrganizationAccountAccessRole \
+            --query "Credentials.[AccessKeyId,SecretAccessKey,SessionToken]" \
+            --output text))
+            terraform apply -auto-approve tfapply
+      - persist_to_workspace:
+          root: .
+          paths:
+            - .
+
+workflows:
+  version: 2
+  plan_approve_apply:
+    jobs:
+      - dev-plan-apply
+      - dev-hold-apply:
+          type: approval
+          requires:
+            - dev-plan-apply
+      - dev-apply:
+          requires:
+            - dev-hold-apply
+      - qa-plan-apply:
+          requires:
+            - dev-apply
+      - qa-hold-apply:
+          type: approval
+          requires:
+            - qa-plan-apply
+      - qa-apply:
+          requires:
+            - qa-hold-apply
+      - prod-plan-apply:
+          requires:
+            - qa-apply
+      - prod-hold-apply:
+          type: approval
+          requires:
+            - prod-plan-apply
+      - prod-apply:
+          requires:
+            - prod-hold-apply
